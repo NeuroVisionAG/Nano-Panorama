@@ -1,7 +1,16 @@
-
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { GoogleGenAI, Modality, GenerateContentResponse } from "@google/genai";
+
+// --- TYPES ---
+
+interface HistoryItem {
+  id: number;
+  prompt: string;
+  templateImageBase64: string;
+  templateImageMimeType: string;
+  generatedImageUrl: string;
+}
 
 // --- UTILS ---
 
@@ -66,6 +75,38 @@ interface PanoramaResult {
   text: string | null;
 }
 
+const generateSourceImage = async (prompt: string): Promise<string> => {
+  if (!process.env.API_KEY) {
+    throw new Error("API ключ не настроен в переменных окружения.");
+  }
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  try {
+    const response = await ai.models.generateImages({
+        model: 'imagen-4.0-generate-001',
+        prompt: prompt,
+        config: {
+          numberOfImages: 1,
+          outputMimeType: 'image/png',
+          aspectRatio: '1:1', // A square image is a good starting point to fit into the 16:9 canvas
+        },
+    });
+
+    if (!response.generatedImages || response.generatedImages.length === 0 || !response.generatedImages[0].image.imageBytes) {
+        throw new Error("Не удалось сгенерировать изображение. Модель не вернула данные изображения.");
+    }
+    
+    return response.generatedImages[0].image.imageBytes; // This is a base64 string
+
+  } catch (error) {
+    console.error("Ошибка при вызове Gemini API для генерации изображения:", error);
+    if (error instanceof Error && (error.message.includes('API_KEY') || error.message.includes('permission denied'))) {
+        throw new Error("Произошла ошибка конфигурации. Проверьте ваш API ключ.");
+    }
+    throw new Error("Не удалось сгенерировать исходное изображение. Пожалуйста, попробуйте еще раз позже.");
+  }
+};
+
+
 const generatePanorama = async (
   base64ImageData: string,
   mimeType: string,
@@ -124,11 +165,36 @@ const SparklesIcon: React.FC = () => (
   </svg>
 );
 
+const MagicWandIcon: React.FC = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clipRule="evenodd" />
+    </svg>
+);
+
 const DownloadIcon: React.FC = () => (
     <svg className="w-5 h-5 mr-2" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 19">
         <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 15h.01M4 12H2a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-4a1 1 0 0 0-1-1h-3m-5.5 0v-5.5m0 0h3m-3 0h-3"/>
     </svg>
 );
+
+const HistoryIcon: React.FC = () => (
+  <svg className="w-6 h-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+  </svg>
+);
+
+const TrashIcon: React.FC = () => (
+    <svg className="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" >
+        <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.134-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.067-2.09 1.02-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+    </svg>
+);
+
+const ReuseIcon: React.FC = () => (
+    <svg className="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 11.667 0m0 0-3.182-3.182m0-11.667a8.25 8.25 0 0 0-11.667 0M6.168 12.33m0 0-3.181-3.182" />
+    </svg>
+);
+
 
 // --- COMPONENTS ---
 
@@ -189,7 +255,7 @@ const PromptInput: React.FC<PromptInputProps> = ({ value, onChange, disabled }) 
   return (
     <div>
       <label htmlFor="prompt" className="block mb-2 text-sm font-medium text-slate-300">Опишите, как расширить изображение</label>
-      <textarea id="prompt" rows={4} value={value} onChange={onChange} disabled={disabled} className="block p-2.5 w-full text-sm text-slate-200 bg-slate-700/50 rounded-lg border border-slate-600 focus:ring-cyan-500 focus:border-cyan-500 placeholder-slate-400 transition-colors" placeholder="Например: 'преврати это в эпический фэнтезийный пейзаж с драконами в небе'"></textarea>
+      <textarea id="prompt" rows={3} value={value} onChange={onChange} disabled={disabled} className="block p-2.5 w-full text-sm text-slate-200 bg-slate-700/50 rounded-lg border border-slate-600 focus:ring-cyan-500 focus:border-cyan-500 placeholder-slate-400 transition-colors" placeholder="Например: 'преврати это в эпический фэнтезийный пейзаж'"></textarea>
     </div>
   );
 };
@@ -256,8 +322,70 @@ const ResultDisplay: React.FC<ResultDisplayProps> = ({ imageUrl, text, isLoading
   );
 };
 
+interface HistoryPanelProps {
+    history: HistoryItem[];
+    onReuse: (item: HistoryItem) => void;
+    onDelete: (id: number) => void;
+    onClear: () => void;
+}
+const HistoryPanel: React.FC<HistoryPanelProps> = ({ history, onReuse, onDelete, onClear }) => {
+    const handleClear = () => {
+        if (window.confirm('Вы уверены, что хотите очистить всю историю? Это действие необратимо.')) {
+            onClear();
+        }
+    };
+    return (
+        <div className="bg-slate-800/50 p-6 rounded-2xl shadow-lg border border-slate-700 flex flex-col h-full max-h-[calc(100vh-4rem)]">
+            <div className="flex justify-between items-center border-b border-slate-700 pb-3 mb-4">
+                <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-2"><HistoryIcon/>История</h2>
+                {history.length > 0 && (
+                    <button onClick={handleClear} className="text-sm text-slate-400 hover:text-red-400 transition-colors flex items-center gap-1">
+                        <TrashIcon /> Очистить
+                    </button>
+                )}
+            </div>
+            <div className="flex-grow overflow-y-auto pr-2 -mr-2">
+                {history.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center text-center text-slate-500 h-full">
+                        <p>Ваша история генераций пуста.</p>
+                    </div>
+                ) : (
+                    <ul className="space-y-4">
+                        {history.map((item) => (
+                            <li key={item.id} className="bg-slate-700/50 p-3 rounded-lg flex gap-4 items-start group">
+                                <img src={item.generatedImageUrl} alt="Generated thumbnail" className="w-20 h-20 object-cover rounded-md flex-shrink-0" />
+                                <div className="flex-grow overflow-hidden">
+                                    <p className="text-sm text-slate-300 truncate" title={item.prompt}>{item.prompt}</p>
+                                    <p className="text-xs text-slate-500 mt-1">{new Date(item.id).toLocaleString('ru-RU')}</p>
+                                    <div className="mt-2 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button onClick={() => onReuse(item)} className="px-2 py-1 text-xs bg-cyan-600 hover:bg-cyan-500 text-white rounded-md flex items-center gap-1"><ReuseIcon /> Использовать</button>
+                                        <button onClick={() => onDelete(item.id)} className="px-2 py-1 text-xs bg-red-800 hover:bg-red-700 text-white rounded-md flex items-center gap-1"><TrashIcon /> Удалить</button>
+                                    </div>
+                                </div>
+                            </li>
+                        ))}
+                    </ul>
+                )}
+            </div>
+        </div>
+    );
+};
 
 // --- MAIN APP ---
+
+const TabButton: React.FC<{ active: boolean; onClick: () => void; children: React.ReactNode }> = ({ active, onClick, children }) => (
+    <button
+        onClick={onClick}
+        className={`px-4 py-2 text-sm w-1/2 font-medium transition-colors border-b-2 ${
+            active
+                ? 'border-cyan-400 text-cyan-300'
+                : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'
+        }`}
+    >
+        {children}
+    </button>
+);
+
 
 const App: React.FC = () => {
   const [base64Image, setBase64Image] = useState<string | null>(null);
@@ -269,6 +397,30 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  
+  const [sourceMode, setSourceMode] = useState<'upload' | 'generate'>('upload');
+  const [initialPrompt, setInitialPrompt] = useState<string>('Робот держит красный скейтборд');
+  const [isGeneratingInitial, setIsGeneratingInitial] = useState<boolean>(false);
+
+  const HISTORY_KEY = 'panorama-history';
+
+  useEffect(() => {
+    try {
+        const storedHistory = localStorage.getItem(HISTORY_KEY);
+        if (storedHistory) {
+            setHistory(JSON.parse(storedHistory));
+        }
+    } catch (e) {
+        console.error("Failed to load history from localStorage", e);
+        setHistory([]);
+    }
+  }, []);
+
+  const updateHistory = (newHistory: HistoryItem[]) => {
+      setHistory(newHistory);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory));
+  };
   
   const handleImageUpload = useCallback(async (file: File) => {
     try {
@@ -285,6 +437,34 @@ const App: React.FC = () => {
       console.error(err);
     }
   }, []);
+
+  const handleGenerateInitial = async () => {
+    if (!initialPrompt) {
+      setError('Пожалуйста, введите описание для генерации изображения.');
+      return;
+    }
+    setIsGeneratingInitial(true);
+    setError(null);
+    setGeneratedImage(null);
+    setGeneratedText(null);
+    setImagePreview(null);
+    setBase64Image(null);
+    try {
+      const generatedBase64 = await generateSourceImage(initialPrompt);
+      const dataUrl = `data:image/png;base64,${generatedBase64}`;
+      const res = await fetch(dataUrl);
+      const blob = await res.blob();
+      const file = new File([blob], "generated.png", { type: "image/png" });
+      await handleImageUpload(file);
+      setSourceMode('upload');
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Не удалось сгенерировать исходное изображение.';
+      setError(errorMessage);
+    } finally {
+      setIsGeneratingInitial(false);
+    }
+  };
+
   
   const handleGenerate = async () => {
     if (!base64Image || !mimeType || !prompt) {
@@ -303,6 +483,17 @@ const App: React.FC = () => {
       setGeneratedImage(result.imageUrl);
       setGeneratedText(result.text);
       setStatusMessage('Панорама успешно создана!');
+
+      if (result.imageUrl) {
+        const newItem: HistoryItem = {
+          id: Date.now(),
+          prompt,
+          templateImageBase64: base64Image,
+          templateImageMimeType: mimeType,
+          generatedImageUrl: result.imageUrl,
+        };
+        updateHistory([newItem, ...history]);
+      }
     } catch (err) {
       let errorMessage = 'Произошла неизвестная ошибка.';
       if (err instanceof Error) {
@@ -315,30 +506,90 @@ const App: React.FC = () => {
     }
   };
 
+  const handleReuseItem = (item: HistoryItem) => {
+      setPrompt(item.prompt);
+      setBase64Image(item.templateImageBase64);
+      setMimeType(item.templateImageMimeType);
+      setImagePreview(`data:${item.templateImageMimeType};base64,${item.templateImageBase64}`);
+      setGeneratedImage(item.generatedImageUrl);
+      setGeneratedText(null);
+      setError(null);
+      setSourceMode('upload');
+  };
+
+  const handleDeleteItem = (id: number) => {
+      updateHistory(history.filter(item => item.id !== id));
+  };
+
+  const handleClearHistory = () => {
+      updateHistory([]);
+  };
+
   const isGenerateDisabled = !base64Image || !prompt || isLoading;
 
   return (
     <div className="min-h-screen bg-slate-900 font-sans p-4 sm:p-6 lg:p-8">
-      <div className="container mx-auto max-w-7xl">
+      <div className="container mx-auto max-w-screen-xl">
         <header className="text-center mb-8">
           <h1 className="text-4xl sm:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-500 pb-2">Генератор Панорам Nano Banana</h1>
-          <p className="text-slate-400 mt-2 max-w-2xl mx-auto">Загрузите изображение, и ИИ дорисует его до формата 16:9, создавая потрясающую панораму.</p>
+          <p className="text-slate-400 mt-2 max-w-2xl mx-auto">Создайте или загрузите изображение, и ИИ дорисует его до формата 16:9.</p>
         </header>
-        <main className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <div className="bg-slate-800/50 p-6 rounded-2xl shadow-lg border border-slate-700 flex flex-col gap-6">
-            <h2 className="text-2xl font-bold text-slate-100 border-b border-slate-700 pb-3">1. Настройка</h2>
-            <ImageUploader onImageUpload={handleImageUpload} previewUrl={imagePreview} />
-            <PromptInput value={prompt} onChange={(e) => setPrompt(e.target.value)} disabled={isLoading} />
+        <main className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+          <div className="lg:col-span-4 bg-slate-800/50 p-6 rounded-2xl shadow-lg border border-slate-700 flex flex-col gap-6">
+            <div>
+                <h2 className="text-2xl font-bold text-slate-100 mb-4">1. Источник</h2>
+                <div className="flex border-b border-slate-700">
+                    <TabButton active={sourceMode === 'upload'} onClick={() => setSourceMode('upload')}>Загрузить</TabButton>
+                    <TabButton active={sourceMode === 'generate'} onClick={() => setSourceMode('generate')}>Сгенерировать</TabButton>
+                </div>
+                <div className="pt-4">
+                    {sourceMode === 'upload' ? (
+                        <ImageUploader onImageUpload={handleImageUpload} previewUrl={imagePreview} />
+                    ) : (
+                        <div className="flex flex-col gap-4">
+                            <div>
+                                <label htmlFor="initial-prompt" className="block mb-2 text-sm font-medium text-slate-300">Опишите исходное изображение</label>
+                                <textarea 
+                                    id="initial-prompt" 
+                                    rows={4} 
+                                    value={initialPrompt} 
+                                    onChange={(e) => setInitialPrompt(e.target.value)} 
+                                    disabled={isLoading || isGeneratingInitial} 
+                                    className="block p-2.5 w-full text-sm text-slate-200 bg-slate-700/50 rounded-lg border border-slate-600 focus:ring-cyan-500 focus:border-cyan-500 placeholder-slate-400 transition-colors" 
+                                    placeholder="Например: 'милый котенок в рыцарских доспехах'"
+                                />
+                            </div>
+                            <button 
+                                onClick={handleGenerateInitial} 
+                                disabled={isGeneratingInitial || isLoading || !initialPrompt} 
+                                className={`w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg shadow-md transition-colors duration-200 ease-in-out ${
+                                    (isGeneratingInitial || isLoading || !initialPrompt)
+                                        ? 'bg-slate-600 text-slate-400 cursor-not-allowed'
+                                        : 'bg-teal-600 text-white hover:bg-teal-500'
+                                }`}
+                            >
+                                {isGeneratingInitial ? <><Loader size="sm" /> Генерируется...</> : <><MagicWandIcon/>Сгенерировать</>}
+                            </button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <PromptInput value={prompt} onChange={(e) => setPrompt(e.target.value)} disabled={isLoading || !base64Image} />
+            
             <button onClick={handleGenerate} disabled={isGenerateDisabled} className={`w-full flex items-center justify-center gap-3 px-6 py-3 text-lg font-semibold rounded-lg shadow-md transition-all duration-300 ease-in-out ${isGenerateDisabled ? 'bg-slate-600 text-slate-400 cursor-not-allowed' : 'bg-gradient-to-r from-cyan-500 to-purple-600 text-white hover:from-cyan-400 hover:to-purple-500 transform hover:scale-105 focus:ring-4 focus:ring-cyan-300/50'}`}>
               {isLoading ? (<><Loader />Генерация...</>) : (<><SparklesIcon />Создать Панораму</>)}
             </button>
             {error && <p className="text-red-400 text-center bg-red-900/50 p-3 rounded-lg">{error}</p>}
           </div>
-          <div className="bg-slate-800/50 p-6 rounded-2xl shadow-lg border border-slate-700 flex flex-col">
+          <div className="lg:col-span-5 bg-slate-800/50 p-6 rounded-2xl shadow-lg border border-slate-700 flex flex-col">
             <h2 className="text-2xl font-bold text-slate-100 border-b border-slate-700 pb-3 mb-6">2. Результат</h2>
             <div className="flex-grow flex items-center justify-center">
               <ResultDisplay imageUrl={generatedImage} text={generatedText} isLoading={isLoading} statusMessage={statusMessage} />
             </div>
+          </div>
+          <div className="lg:col-span-3">
+             <HistoryPanel history={history} onReuse={handleReuseItem} onDelete={handleDeleteItem} onClear={handleClearHistory} />
           </div>
         </main>
       </div>
