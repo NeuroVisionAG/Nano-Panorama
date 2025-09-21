@@ -156,6 +156,54 @@ const generatePanorama = async (
   }
 };
 
+const enhanceImage = async (
+  base64ImageData: string,
+  mimeType: string
+): Promise<PanoramaResult> => {
+  if (!process.env.API_KEY) {
+    throw new Error("API ключ не настроен в переменных окружения.");
+  }
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  try {
+    const prompt = "Значительно улучши качество и детализацию этого изображения. Сделай его более четким, с высоким разрешением и фотореалистичным, сохраняя при этом исходную композицию и тематику. Не добавляй никаких новых объектов или элементов, просто улучши существующее изображение.";
+    const response: GenerateContentResponse = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image-preview',
+      contents: {
+        parts: [
+          { inlineData: { data: base64ImageData, mimeType: mimeType } },
+          { text: prompt },
+        ],
+      },
+      config: {
+        responseModalities: [Modality.IMAGE, Modality.TEXT],
+      },
+    });
+    let imageUrl: string | null = null;
+    let text: string | null = null;
+    if (response.candidates && response.candidates.length > 0) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData && part.inlineData.data) {
+          const base64Bytes = part.inlineData.data;
+          const imageMimeType = part.inlineData.mimeType;
+          imageUrl = `data:${imageMimeType};base64,${base64Bytes}`;
+        } else if (part.text) {
+          text = part.text;
+        }
+      }
+    }
+    if (!imageUrl) {
+        throw new Error("Не удалось улучшить изображение. Модель не вернула изображение в ответе.");
+    }
+    return { imageUrl, text };
+  } catch (error) {
+    console.error("Ошибка при вызове Gemini API для улучшения:", error);
+    if (error instanceof Error && (error.message.includes('API_KEY') || error.message.includes('permission denied'))) {
+        throw new Error("Произошла ошибка конфигурации. Проверьте ваш API ключ.");
+    }
+    throw new Error("Не удалось улучшить изображение. Пожалуйста, попробуйте еще раз позже.");
+  }
+};
+
 
 // --- ICONS ---
 
@@ -192,6 +240,12 @@ const TrashIcon: React.FC = () => (
 const ReuseIcon: React.FC = () => (
     <svg className="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 11.667 0m0 0-3.182-3.182m0-11.667a8.25 8.25 0 0 0-11.667 0M6.168 12.33m0 0-3.181-3.182" />
+    </svg>
+);
+
+const EnhanceIcon: React.FC = () => (
+    <svg className="w-5 h-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
     </svg>
 );
 
@@ -265,8 +319,10 @@ interface ResultDisplayProps {
   text: string | null;
   isLoading: boolean;
   statusMessage: string;
+  onEnhance: () => void;
+  isEnhancing: boolean;
 }
-const ResultDisplay: React.FC<ResultDisplayProps> = ({ imageUrl, text, isLoading, statusMessage }) => {
+const ResultDisplay: React.FC<ResultDisplayProps> = ({ imageUrl, text, isLoading, statusMessage, onEnhance, isEnhancing }) => {
   const handleDownload = async () => {
     if (!imageUrl) return;
     try {
@@ -290,12 +346,16 @@ const ResultDisplay: React.FC<ResultDisplayProps> = ({ imageUrl, text, isLoading
     }
   };
 
-  if (isLoading) {
+  if (isLoading || isEnhancing) {
     return (
       <div className="flex flex-col items-center justify-center text-center gap-4">
         <Loader size="lg" />
-        <p className="text-lg text-slate-300 animate-pulse">{statusMessage}</p>
-        <p className="text-sm text-slate-400">Процесс может занять до минуты.</p>
+        <p className="text-lg text-slate-300 animate-pulse">
+            {isEnhancing ? 'Улучшение качества...' : statusMessage}
+        </p>
+        <p className="text-sm text-slate-400">
+            {isEnhancing ? 'Это может занять некоторое время.' : 'Процесс может занять до минуты.'}
+        </p>
       </div>
     );
   }
@@ -306,10 +366,16 @@ const ResultDisplay: React.FC<ResultDisplayProps> = ({ imageUrl, text, isLoading
           <img src={imageUrl} alt="Сгенерированная панорама" className="w-full h-full object-contain" />
         </div>
         {text && <p className="text-sm text-slate-400 italic mt-2 text-center max-w-lg">"{text}"</p>}
-        <button onClick={handleDownload} className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-center text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300/50 transition-colors">
-          <DownloadIcon />
-          Скачать изображение
-        </button>
+        <div className="flex flex-wrap justify-center items-center gap-4 mt-4">
+            <button onClick={handleDownload} className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-center text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300/50 transition-colors">
+              <DownloadIcon />
+              Скачать
+            </button>
+            <button onClick={onEnhance} disabled={isEnhancing || isLoading} className={`inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-center text-white rounded-lg transition-colors ${(isEnhancing || isLoading) ? 'bg-slate-600 cursor-not-allowed' : 'bg-teal-600 hover:bg-teal-700 focus:ring-4 focus:outline-none focus:ring-teal-300/50'}`}>
+              <EnhanceIcon />
+              Улучшить качество
+            </button>
+        </div>
       </div>
     );
   }
@@ -395,6 +461,7 @@ const App: React.FC = () => {
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [generatedText, setGeneratedText] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isEnhancing, setIsEnhancing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -506,6 +573,36 @@ const App: React.FC = () => {
     }
   };
 
+  const handleEnhance = async () => {
+    if (!generatedImage) {
+        setError('Нет изображения для улучшения.');
+        return;
+    }
+    setIsEnhancing(true);
+    setError(null);
+    setGeneratedText(null); // Clear previous model text
+    try {
+        const parts = generatedImage.split(',');
+        if (parts.length !== 2) throw new Error('Неверный формат Data URL изображения');
+        const mimeType = parts[0].match(/:(.*?);/)?.[1] || 'image/png';
+        const base64Data = parts[1];
+        const result = await enhanceImage(base64Data, mimeType);
+        setGeneratedImage(result.imageUrl);
+        setGeneratedText(result.text);
+        if (result.imageUrl && history.length > 0) {
+            const latestHistoryItem = history[0];
+            const updatedItem = { ...latestHistoryItem, generatedImageUrl: result.imageUrl };
+            const newHistory = [updatedItem, ...history.slice(1)];
+            updateHistory(newHistory);
+        }
+    } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Произошла неизвестная ошибка при улучшении.';
+        setError(errorMessage);
+    } finally {
+        setIsEnhancing(false);
+    }
+  };
+
   const handleReuseItem = (item: HistoryItem) => {
       setPrompt(item.prompt);
       setBase64Image(item.templateImageBase64);
@@ -585,7 +682,7 @@ const App: React.FC = () => {
           <div className="lg:col-span-5 bg-slate-800/50 p-6 rounded-2xl shadow-lg border border-slate-700 flex flex-col">
             <h2 className="text-2xl font-bold text-slate-100 border-b border-slate-700 pb-3 mb-6">2. Результат</h2>
             <div className="flex-grow flex items-center justify-center">
-              <ResultDisplay imageUrl={generatedImage} text={generatedText} isLoading={isLoading} statusMessage={statusMessage} />
+              <ResultDisplay imageUrl={generatedImage} text={generatedText} isLoading={isLoading} statusMessage={statusMessage} onEnhance={handleEnhance} isEnhancing={isEnhancing} />
             </div>
           </div>
           <div className="lg:col-span-3">
