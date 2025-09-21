@@ -75,11 +75,11 @@ interface PanoramaResult {
   text: string | null;
 }
 
-const generateSourceImage = async (prompt: string): Promise<string> => {
-  if (!process.env.API_KEY) {
-    throw new Error("API ключ не настроен в переменных окружения.");
+const generateSourceImage = async (prompt: string, apiKey: string): Promise<string> => {
+  if (!apiKey) {
+    throw new Error("API ключ не предоставлен.");
   }
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: apiKey });
   try {
     const response = await ai.models.generateImages({
         model: 'imagen-4.0-generate-001',
@@ -110,12 +110,13 @@ const generateSourceImage = async (prompt: string): Promise<string> => {
 const generatePanorama = async (
   base64ImageData: string,
   mimeType: string,
-  userPrompt: string
+  userPrompt: string,
+  apiKey: string
 ): Promise<PanoramaResult> => {
-  if (!process.env.API_KEY) {
-    throw new Error("API ключ не настроен в переменных окружения.");
+  if (!apiKey) {
+    throw new Error("API ключ не предоставлен.");
   }
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: apiKey });
   try {
     const fullPrompt = `Ваша задача — заполнить прозрачные области на этом холсте, чтобы создать полную, бесшовную и целостную сцену. Центральное изображение — это отправная точка. Естественно расширьте сцену, сохраняя стиль, освещение, перспективу и детали оригинального изображения. Финальный результат должен быть полноценным изображением с соотношением сторон 16:9. Дополнительно учтите пожелание пользователя: ${userPrompt}`;
     const response: GenerateContentResponse = await ai.models.generateContent({
@@ -158,12 +159,13 @@ const generatePanorama = async (
 
 const enhanceImage = async (
   base64ImageData: string,
-  mimeType: string
+  mimeType: string,
+  apiKey: string
 ): Promise<PanoramaResult> => {
-  if (!process.env.API_KEY) {
-    throw new Error("API ключ не настроен в переменных окружения.");
+  if (!apiKey) {
+    throw new Error("API ключ не предоставлен.");
   }
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey: apiKey });
   try {
     const prompt = "Значительно улучши качество и детализацию этого изображения. Сделай его более четким, с высоким разрешением и фотореалистичным, сохраняя при этом исходную композицию и тематику. Не добавляй никаких новых объектов или элементов, просто улучши существующее изображение.";
     const response: GenerateContentResponse = await ai.models.generateContent({
@@ -454,6 +456,7 @@ const TabButton: React.FC<{ active: boolean; onClick: () => void; children: Reac
 
 
 const App: React.FC = () => {
+  const [apiKey, setApiKey] = useState<string>('');
   const [base64Image, setBase64Image] = useState<string | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [mimeType, setMimeType] = useState<string | null>(null);
@@ -510,6 +513,10 @@ const App: React.FC = () => {
       setError('Пожалуйста, введите описание для генерации изображения.');
       return;
     }
+    if (!apiKey) {
+      setError('Пожалуйста, введите ваш API ключ.');
+      return;
+    }
     setIsGeneratingInitial(true);
     setError(null);
     setGeneratedImage(null);
@@ -517,7 +524,7 @@ const App: React.FC = () => {
     setImagePreview(null);
     setBase64Image(null);
     try {
-      const generatedBase64 = await generateSourceImage(initialPrompt);
+      const generatedBase64 = await generateSourceImage(initialPrompt, apiKey);
       const dataUrl = `data:image/png;base64,${generatedBase64}`;
       const res = await fetch(dataUrl);
       const blob = await res.blob();
@@ -534,8 +541,8 @@ const App: React.FC = () => {
 
   
   const handleGenerate = async () => {
-    if (!base64Image || !mimeType || !prompt) {
-      setError('Пожалуйста, загрузите изображение и введите описание.');
+    if (!base64Image || !mimeType || !prompt || !apiKey) {
+      setError('Пожалуйста, загрузите изображение, введите описание и укажите ваш API-ключ.');
       return;
     }
     setIsLoading(true);
@@ -546,7 +553,7 @@ const App: React.FC = () => {
     try {
       setTimeout(() => setStatusMessage('Анализ изображения и подсказки...'), 1500);
       setTimeout(() => setStatusMessage('Расширение сцены до 16:9...'), 4000);
-      const result = await generatePanorama(base64Image, mimeType, prompt);
+      const result = await generatePanorama(base64Image, mimeType, prompt, apiKey);
       setGeneratedImage(result.imageUrl);
       setGeneratedText(result.text);
       setStatusMessage('Панорама успешно создана!');
@@ -578,6 +585,10 @@ const App: React.FC = () => {
         setError('Нет изображения для улучшения.');
         return;
     }
+     if (!apiKey) {
+      setError('Пожалуйста, введите ваш API ключ.');
+      return;
+    }
     setIsEnhancing(true);
     setError(null);
     setGeneratedText(null); // Clear previous model text
@@ -586,7 +597,7 @@ const App: React.FC = () => {
         if (parts.length !== 2) throw new Error('Неверный формат Data URL изображения');
         const mimeType = parts[0].match(/:(.*?);/)?.[1] || 'image/png';
         const base64Data = parts[1];
-        const result = await enhanceImage(base64Data, mimeType);
+        const result = await enhanceImage(base64Data, mimeType, apiKey);
         setGeneratedImage(result.imageUrl);
         setGeneratedText(result.text);
         if (result.imageUrl && history.length > 0) {
@@ -622,7 +633,7 @@ const App: React.FC = () => {
       updateHistory([]);
   };
 
-  const isGenerateDisabled = !base64Image || !prompt || isLoading;
+  const isGenerateDisabled = !base64Image || !prompt || isLoading || !apiKey;
 
   return (
     <div className="min-h-screen bg-slate-900 font-sans p-4 sm:p-6 lg:p-8">
@@ -658,9 +669,9 @@ const App: React.FC = () => {
                             </div>
                             <button 
                                 onClick={handleGenerateInitial} 
-                                disabled={isGeneratingInitial || isLoading || !initialPrompt} 
+                                disabled={isGeneratingInitial || isLoading || !initialPrompt || !apiKey} 
                                 className={`w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg shadow-md transition-colors duration-200 ease-in-out ${
-                                    (isGeneratingInitial || isLoading || !initialPrompt)
+                                    (isGeneratingInitial || isLoading || !initialPrompt || !apiKey)
                                         ? 'bg-slate-600 text-slate-400 cursor-not-allowed'
                                         : 'bg-teal-600 text-white hover:bg-teal-500'
                                 }`}
@@ -674,6 +685,24 @@ const App: React.FC = () => {
 
             <PromptInput value={prompt} onChange={(e) => setPrompt(e.target.value)} disabled={isLoading || !base64Image} />
             
+            <div>
+              <label htmlFor="api-key" className="block mb-2 text-sm font-medium text-slate-300">
+                Ваш Gemini API Ключ
+              </label>
+              <input
+                type="password"
+                id="api-key"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                disabled={isLoading || isGeneratingInitial || isEnhancing}
+                className="block p-2.5 w-full text-sm text-slate-200 bg-slate-700/50 rounded-lg border border-slate-600 focus:ring-cyan-500 focus:border-cyan-500 placeholder-slate-400 transition-colors"
+                placeholder="Вставьте ваш API ключ сюда"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                Ключ не сохраняется. Его можно получить в <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">Google AI Studio</a>.
+              </p>
+            </div>
+
             <button onClick={handleGenerate} disabled={isGenerateDisabled} className={`w-full flex items-center justify-center gap-3 px-6 py-3 text-lg font-semibold rounded-lg shadow-md transition-all duration-300 ease-in-out ${isGenerateDisabled ? 'bg-slate-600 text-slate-400 cursor-not-allowed' : 'bg-gradient-to-r from-cyan-500 to-purple-600 text-white hover:from-cyan-400 hover:to-purple-500 transform hover:scale-105 focus:ring-4 focus:ring-cyan-300/50'}`}>
               {isLoading ? (<><Loader />Генерация...</>) : (<><SparklesIcon />Создать Панораму</>)}
             </button>
